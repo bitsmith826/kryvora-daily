@@ -4,6 +4,7 @@ node_modules/
 # Private sensitive data
 pk.txt
 .env
+sessions.json
 
 # Logs and runtime artifacts
 *.log
