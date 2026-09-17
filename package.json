@@ -1,0 +1,22 @@
+{
+  "name": "kryvora-daily",
+  "version": "1.0.0",
+  "description": "Multi-wallet daily check-in and task claimer automation for Kryvora Network",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "kryvora",
+    "evm",
+    "daily-claim",
+    "airdrop",
+    "ethers"
+  ],
+  "author": "bitsmith826",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "ethers": "^6.17.0"
+  }
+}

@@ -1,0 +1,7 @@
+# Masukkan daftar EVM Private Key Anda di sini (satu baris per key).
+# Format: Hex 64 karakter (bisa diawali '0x' atau tanpa '0x').
+# Salin file ini menjadi pk.txt dan masukkan key asli Anda.
+# File pk.txt sudah diabaikan oleh .gitignore dan tidak akan pernah terunggah ke GitHub.
+
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
