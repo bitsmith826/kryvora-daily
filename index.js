@@ -69,7 +69,7 @@ function formatNumber(num) {
 }
 
 /**
- * Masks an Ethereum address (e.g. 0x728F...De7F).
+ * Masks an Ethereum address (e.g. 0x1234...5678).
  */
 function maskAddress(addr) {
   if (!addr || addr.length < 12) return addr || '-';
