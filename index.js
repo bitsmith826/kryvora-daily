@@ -1,7 +1,7 @@
 /**
- * Kryvora Daily - Multi-Wallet Automation Runner (Parallel Edition)
+ * Kryvora Daily - Multi-Wallet Automation Runner
  * Automates daily check-ins, onboarding quests, and reward claims for Kryvora Network
- * with concurrent worker pool support and 24-hour session caching.
+ * with 24-hour session caching and clean, precision-aligned terminal UI.
  */
 
 const fs = require('fs');
@@ -31,7 +31,7 @@ const colors = {
   white: '\x1b[37m'
 };
 
-const LAYOUT_WIDTH = 111;
+const LAYOUT_WIDTH = 105;
 const SESSIONS_PATH = path.join(__dirname, 'sessions.json');
 
 /**
@@ -125,14 +125,61 @@ function saveSession(address, token) {
 }
 
 /**
+ * Executes an async task while showing an animated timer/progress in the terminal.
+ */
+async function runWithTimer(label, taskFn) {
+  const isTTY = Boolean(process.stdout.isTTY);
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let frameIdx = 0;
+  const startTime = Date.now();
+
+  let timer = null;
+  if (isTTY) {
+    timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const icon = `${colors.cyan}${frames[frameIdx++ % frames.length]}${colors.reset}`;
+      process.stdout.write(`\r  ${getTimestamp()} ${icon} ${label} ${colors.dim}(menunggu server: ${elapsed}s)...${colors.reset}`);
+    }, 120);
+  } else {
+    process.stdout.write(`  ${getTimestamp()} ⋯ ${label}... `);
+  }
+
+  try {
+    const result = await taskFn();
+    if (timer) clearInterval(timer);
+    const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    if (isTTY) {
+      process.stdout.write(
+        `\r  ${getTimestamp()} ${colors.green}✔${colors.reset} ${label} ${colors.green}OK${colors.reset} ${colors.dim}(${totalDuration}s)${colors.reset}                  \n`
+      );
+    } else {
+      console.log(`${colors.green}OK${colors.reset} ${colors.dim}(${totalDuration}s)${colors.reset}`);
+    }
+    return result;
+  } catch (err) {
+    if (timer) clearInterval(timer);
+    const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    if (isTTY) {
+      process.stdout.write(
+        `\r  ${getTimestamp()} ${colors.red}✖${colors.reset} ${label} ${colors.red}GAGAL${colors.reset} ${colors.dim}(${totalDuration}s)${colors.reset}                  \n`
+      );
+    } else {
+      console.log(`${colors.red}GAGAL${colors.reset} ${colors.dim}(${totalDuration}s)${colors.reset}`);
+    }
+    throw err;
+  }
+}
+
+/**
  * Loads configuration from .env if present.
  */
 function loadEnv() {
   const envPath = path.join(__dirname, '.env');
   const config = {
-    CONCURRENCY: 5,
     DEFAULT_REFERRAL_CODE: '651A7DCB2E',
-    DELAY_BETWEEN_WALLETS_SEC: 2,
+    DELAY_BETWEEN_WALLETS_SEC: 1,
     AUTO_ONBOARDING: true,
     AUTO_GACHA_REVEAL: true
   };
@@ -145,9 +192,8 @@ function loadEnv() {
       const [key, ...rest] = trimmed.split('=');
       const val = rest.join('=').trim();
       if (key && val) {
-        if (key === 'CONCURRENCY') config.CONCURRENCY = Math.max(1, parseInt(val, 10) || 5);
         if (key === 'DEFAULT_REFERRAL_CODE') config.DEFAULT_REFERRAL_CODE = val;
-        if (key === 'DELAY_BETWEEN_WALLETS_SEC') config.DELAY_BETWEEN_WALLETS_SEC = parseInt(val, 10) || 2;
+        if (key === 'DELAY_BETWEEN_WALLETS_SEC') config.DELAY_BETWEEN_WALLETS_SEC = parseInt(val, 10) || 1;
         if (key === 'AUTO_ONBOARDING') config.AUTO_ONBOARDING = val.toLowerCase() === 'true';
         if (key === 'AUTO_GACHA_REVEAL') config.AUTO_GACHA_REVEAL = val.toLowerCase() === 'true';
       }
@@ -191,12 +237,11 @@ function loadPrivateKeys() {
 function printBanner(config, totalWallets) {
   const innerWidth = LAYOUT_WIDTH - 2;
   console.log(`\n${colors.cyan}${colors.bold}╔${'═'.repeat(innerWidth)}╗`);
-  console.log(`║${padVisible('KRYVORA NETWORK DAILY BOT (PARALEL)', innerWidth, 'center')}║`);
+  console.log(`║${padVisible('KRYVORA NETWORK DAILY BOT', innerWidth, 'center')}║`);
   console.log(`║${padVisible('Multi-Wallet EVM Task Claimer & Auto Check-in', innerWidth, 'center')}║`);
   console.log(`╚${'═'.repeat(innerWidth)}╝${colors.reset}`);
 
   console.log(`  ${getTimestamp()} ${colors.green}Total Wallet Terdeteksi :${colors.reset} ${colors.bold}${totalWallets}${colors.reset} akun`);
-  console.log(`  ${getTimestamp()} ${colors.magenta}${colors.bold}Mode Eksekusi Paralel   :${colors.reset} ${colors.bold}${config.CONCURRENCY} akun berjalan bersamaan${colors.reset}`);
   console.log(`  ${getTimestamp()} ${colors.cyan}Referral Code Bawaan    :${colors.reset} ${config.DEFAULT_REFERRAL_CODE}`);
   console.log(`  ${getTimestamp()} ${colors.cyan}Auto Onboarding Tasks   :${colors.reset} ${config.AUTO_ONBOARDING ? colors.green + 'AKTIF (+250 Poin)' : colors.yellow + 'NONAKTIF'}${colors.reset}`);
   console.log(`  ${getTimestamp()} ${colors.cyan}Session Token Caching   :${colors.reset} ${colors.green}AKTIF (Sesi disimpan 24 jam untuk klaim instan)${colors.reset}`);
@@ -204,199 +249,19 @@ function printBanner(config, totalWallets) {
 }
 
 /**
- * Processes a single wallet account.
+ * Prints the account card header.
  */
-async function processWallet(rawKey, accountIndex, totalAccounts, config) {
-  const tag = `[Akun ${String(accountIndex).padStart(2, '0')}/${totalAccounts}]`;
-  let wallet = null;
-
-  try {
-    wallet = getWallet(rawKey);
-  } catch (err) {
-    console.log(`  ${getTimestamp()} ${colors.red}${tag} Key Error: ${err.message}${colors.reset}`);
-    return {
-      index: accountIndex,
-      address: 'INVALID_KEY',
-      initialPoints: 0,
-      finalPoints: 0,
-      streak: 0,
-      level: 0,
-      rank: '-',
-      status: `${colors.red}Key Error${colors.reset}`
-    };
-  }
-
-  const addr = wallet.address;
-  const masked = maskAddress(addr);
-  const addrKey = addr.toLowerCase();
-
-  let record = {
-    index: accountIndex,
-    address: addr,
-    initialPoints: 0,
-    finalPoints: 0,
-    streak: 0,
-    level: 1,
-    rank: '-',
-    status: `${colors.yellow}[ Menunggu ]${colors.reset}`
-  };
-
-  try {
-    let token = null;
-    let user = null;
-
-    // 1. Check Session Cache (24-Hour Token)
-    const cached = memorySessions[addrKey];
-    if (cached && cached.token && cached.expiresAt && cached.expiresAt > Date.now() + 60000) {
-      try {
-        const profileCheck = await getProfile(cached.token);
-        if (profileCheck && profileCheck.user) {
-          token = cached.token;
-          user = profileCheck.user;
-          console.log(`  ${getTimestamp()} ⚡ ${colors.cyan}${tag} ${masked}:${colors.reset} Sesi 24 jam aktif (Cache) | Poin: ${formatNumber(user.points)}`);
-        }
-      } catch (_) {}
-    }
-
-    // 2. Fresh Authentication if no valid cached token
-    if (!token || !user) {
-      console.log(`  ${getTimestamp()} 🔑 ${colors.blue}${tag} ${masked}:${colors.reset} Meminta nonce & menandatangani pesan...`);
-      const nonceData = await fetchNonce(addr, config.DEFAULT_REFERRAL_CODE);
-      const signature = await signLoginMessage(wallet, nonceData.message);
-
-      console.log(`  ${getTimestamp()} ⋯ ${colors.yellow}${tag} ${masked}:${colors.reset} Verifikasi server Kryvora (sedang memproses)...`);
-      const verifyRes = await verifyWallet(addr, signature);
-      token = verifyRes.token;
-      user = verifyRes.user || {};
-      saveSession(addr, token);
-      console.log(`  ${getTimestamp()} ✔ ${colors.green}${tag} ${masked}:${colors.reset} Login berhasil | Poin Awal: ${formatNumber(user.points)}`);
-    }
-
-    record.initialPoints = user.points || 0;
-    record.streak = user.dailyStreak || 0;
-    record.level = user.level || 1;
-    record.rank = user.rank || '-';
-
-    // 3. Auto Onboarding Tasks (Connect Wallet + Add Network)
-    if (config.AUTO_ONBOARDING) {
-      const completed = new Set(user.completedQuestIds || []);
-
-      if (!completed.has('quest-wallet')) {
-        try {
-          const vRes = await verifyQuest(token, 'quest-wallet');
-          if (vRes.claimable) {
-            const cRes = await claimQuest(token, 'quest-wallet');
-            if (cRes.user) user = cRes.user;
-            console.log(`  ${getTimestamp()} 🎁 ${colors.green}${tag} ${masked}:${colors.reset} Quest Connect Wallet BERHASIL (+100 Poin)`);
-          }
-        } catch (_) {}
-      }
-
-      if (!completed.has('quest-add-network')) {
-        try {
-          const vRes = await verifyQuest(token, 'quest-add-network', { chainIdHex: '0x4668b2c' });
-          if (vRes.claimable) {
-            const cRes = await claimQuest(token, 'quest-add-network');
-            if (cRes.user) user = cRes.user;
-            console.log(`  ${getTimestamp()} 🎁 ${colors.green}${tag} ${masked}:${colors.reset} Quest Add Network BERHASIL (+150 Poin)`);
-          }
-        } catch (_) {}
-      }
-    }
-
-    // 4. Daily GM Check-in (quest-daily-gm, +50 Poin)
-    const claimedDaily = new Set(user.claimedDailyQuestIds || []);
-    const todayUTC = new Date().toISOString().split('T')[0];
-    const alreadyClaimedToday =
-      claimedDaily.has('quest-daily-gm') || user.lastDailyClaim === todayUTC;
-
-    if (!alreadyClaimedToday) {
-      try {
-        const gmClaim = await claimQuest(token, 'quest-daily-gm');
-        if (gmClaim.claimed) {
-          record.status = `${colors.green}[ KLAIM SUKSES ]${colors.reset}`;
-          if (gmClaim.user) user = gmClaim.user;
-          console.log(`  ${getTimestamp()} ☀️ ${colors.green}${tag} ${masked}:${colors.bold} Daily GM BERHASIL (+${gmClaim.pointsAwarded || 50} Poin)!${colors.reset} Streak: ${user.dailyStreak || 1} hari`);
-        } else {
-          record.status = `${colors.yellow}[ Cek Manual ]${colors.reset}`;
-        }
-      } catch (gmErr) {
-        console.log(`  ${getTimestamp()} ✖ ${colors.red}${tag} ${masked}: Daily GM Gagal (${gmErr.message})${colors.reset}`);
-        record.status = `${colors.red}[ Gagal ]${colors.reset}`;
-      }
-    } else {
-      console.log(`  ${getTimestamp()} 💤 ${colors.cyan}${tag} ${masked}: Daily GM sudah diklaim hari ini (${user.lastDailyClaim || todayUTC}). Reset pkl 07:00 WIB.${colors.reset}`);
-      record.status = `${colors.cyan}[ SUDAH KLAIM ]${colors.reset}`;
-    }
-
-    // 5. Sweep pending claimable quests
-    if (Array.isArray(user.claimableQuestIds) && user.claimableQuestIds.length > 0) {
-      for (const qId of user.claimableQuestIds) {
-        try {
-          const sClaim = await claimQuest(token, qId);
-          if (sClaim.user) user = sClaim.user;
-          console.log(`  ${getTimestamp()} ✨ ${colors.magenta}${tag} ${masked}: Klaim quest tertunda ${qId} (+${sClaim.pointsAwarded || 0} Poin)${colors.reset}`);
-        } catch (_) {}
-      }
-    }
-
-    // 6. Gacha Reveal
-    if (config.AUTO_GACHA_REVEAL) {
-      try {
-        const gacha = await getGachaStatus(token);
-        if (gacha.unrevealedCount > 0 && Array.isArray(gacha.tokens)) {
-          for (const t of gacha.tokens) {
-            if (!t.revealed) {
-              const rRes = await revealGacha(token, t.tokenId);
-              console.log(`  ${getTimestamp()} 🎲 ${colors.magenta}${tag} ${masked}: Gacha reveal #${t.tokenId} sukses! Multiplier: ${rRes.multiplier || '-'}${colors.reset}`);
-            }
-          }
-        }
-      } catch (_) {}
-    }
-
-    // 7. Refresh Final Profile
-    try {
-      const refreshed = await getProfile(token);
-      if (refreshed.user) user = refreshed.user;
-    } catch (_) {}
-
-    record.finalPoints = user.points || record.initialPoints;
-    record.streak = user.dailyStreak || record.streak;
-    record.level = user.level || record.level;
-    record.rank = user.rank || record.rank;
-
-    const earned = record.finalPoints - record.initialPoints;
-    const earnedFormatted = earned > 0 ? `+${formatNumber(earned)}` : formatNumber(earned);
-
-    console.log(
-      `  ${getTimestamp()} 🏁 ${colors.green}${tag} ${masked}: Selesai! Poin Akhir: ${colors.bold}${formatNumber(record.finalPoints)}${colors.reset} ` +
-      `(${colors.bold}${earnedFormatted} Poin${colors.reset}) | Streak: ${colors.yellow}${record.streak}d${colors.reset}`
-    );
-  } catch (err) {
-    console.log(`  ${getTimestamp()} ${colors.red}${tag} ${masked} Error: ${err.message}${colors.reset}`);
-    record.status = `${colors.red}[ Error ]${colors.reset}`;
-  }
-
-  return record;
+function printAccountHeader(index, total, address) {
+  const cardContent = ` [Akun ${index}/${total}] ${address} `;
+  const remaining = LAYOUT_WIDTH - cardContent.length - 2;
+  console.log(`${colors.blue}${colors.bold}┌─${cardContent}${'─'.repeat(Math.max(0, remaining))}┐${colors.reset}`);
 }
 
 /**
- * Worker pool to process items concurrently.
+ * Prints the account card footer.
  */
-async function runParallelPool(items, concurrency, workerFn) {
-  const results = new Array(items.length);
-  let currentIndex = 0;
-
-  const workers = Array.from({ length: concurrency }, async (_, workerId) => {
-    while (currentIndex < items.length) {
-      const idx = currentIndex++;
-      results[idx] = await workerFn(items[idx], idx + 1, items.length);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
+function printAccountFooter() {
+  console.log(`${colors.blue}└${'─'.repeat(LAYOUT_WIDTH - 2)}┘${colors.reset}\n`);
 }
 
 /**
@@ -410,19 +275,223 @@ async function main() {
   printBanner(config, privateKeys.length);
 
   const startTime = Date.now();
+  const summary = [];
 
-  // Run all wallets concurrently with configured concurrency limit
-  const summary = await runParallelPool(
-    privateKeys,
-    config.CONCURRENCY,
-    async (key, index, total) => {
-      return await processWallet(key, index, total, config);
+  for (let i = 0; i < privateKeys.length; i++) {
+    const rawKey = privateKeys[i];
+    const accountIndex = i + 1;
+    let wallet = null;
+
+    try {
+      wallet = getWallet(rawKey);
+    } catch (err) {
+      console.log(`  ${getTimestamp()} ${colors.red}[!] Private Key Akun #${accountIndex} tidak valid: ${err.message}${colors.reset}\n`);
+      summary.push({
+        index: accountIndex,
+        address: 'INVALID_KEY',
+        initialPoints: 0,
+        finalPoints: 0,
+        streak: 0,
+        level: 0,
+        rank: '-',
+        status: `${colors.red}Key Error${colors.reset}`
+      });
+      continue;
     }
-  );
+
+    const addr = wallet.address;
+    const addrKey = addr.toLowerCase();
+    printAccountHeader(accountIndex, privateKeys.length, addr);
+
+    let record = {
+      index: accountIndex,
+      address: addr,
+      initialPoints: 0,
+      finalPoints: 0,
+      streak: 0,
+      level: 1,
+      rank: '-',
+      status: `${colors.yellow}[ Menunggu ]${colors.reset}`
+    };
+
+    try {
+      let token = null;
+      let user = null;
+
+      // 1. Check Session Cache (24-Hour Token)
+      const cached = memorySessions[addrKey];
+      if (cached && cached.token && cached.expiresAt && cached.expiresAt > Date.now() + 60000) {
+        try {
+          const profileCheck = await runWithTimer('[1/5] Verifikasi Sesi Tersimpan (Cache)', async () => {
+            return await getProfile(cached.token);
+          });
+          if (profileCheck && profileCheck.user) {
+            token = cached.token;
+            user = profileCheck.user;
+            console.log(`  ${getTimestamp()}       ${colors.green}└─ Sesi 24 jam aktif! Melewati login server (Instan).${colors.reset}`);
+          }
+        } catch (_) {}
+      }
+
+      // 2. Fresh Authentication if no valid cached token
+      if (!token || !user) {
+        const nonceData = await runWithTimer('[1/5] Request Challenge Nonce', async () => {
+          return await fetchNonce(addr, config.DEFAULT_REFERRAL_CODE);
+        });
+
+        const signature = await runWithTimer('[2/5] Sign Login Message (EIP-191 personal_sign)', async () => {
+          return await signLoginMessage(wallet, nonceData.message);
+        });
+
+        const verifyRes = await runWithTimer('[3/5] Verifikasi Signature ke Server Kryvora', async () => {
+          return await verifyWallet(addr, signature);
+        });
+
+        token = verifyRes.token;
+        user = verifyRes.user || {};
+        saveSession(addr, token);
+      }
+
+      record.initialPoints = user.points || 0;
+      record.streak = user.dailyStreak || 0;
+      record.level = user.level || 1;
+      record.rank = user.rank || '-';
+
+      console.log(
+        `  ${getTimestamp()}       ${colors.dim}└─ Profil Awal : ${colors.bold}${formatNumber(user.points)} Poin${colors.reset} | ` +
+        `Streak: ${colors.yellow}${user.dailyStreak || 0} hari${colors.reset} | ` +
+        `Level: Lv.${user.level || 1} | Rank: #${formatNumber(user.rank)}`
+      );
+
+      // 3. Auto Onboarding Tasks (Connect Wallet + Add Network)
+      if (config.AUTO_ONBOARDING) {
+        const completed = new Set(user.completedQuestIds || []);
+
+        // Task: Connect Wallet (+100 Poin)
+        if (!completed.has('quest-wallet')) {
+          try {
+            await runWithTimer('[ONBOARD] Verifikasi Quest Connect Wallet', async () => {
+              const vRes = await verifyQuest(token, 'quest-wallet');
+              if (vRes.claimable) {
+                const cRes = await claimQuest(token, 'quest-wallet');
+                if (cRes.user) user = cRes.user;
+              }
+            });
+            console.log(`  ${getTimestamp()}       ${colors.green}└─ Quest Connect Wallet BERHASIL (+100 Poin)${colors.reset}`);
+          } catch (qErr) {
+            console.log(`  ${getTimestamp()}       ${colors.yellow}└─ Quest Connect Wallet: ${qErr.message}${colors.reset}`);
+          }
+        }
+
+        // Task: Add Network (+150 Poin)
+        if (!completed.has('quest-add-network')) {
+          try {
+            await runWithTimer('[ONBOARD] Verifikasi Quest Add Kryvora Network', async () => {
+              const vRes = await verifyQuest(token, 'quest-add-network', { chainIdHex: '0x4668b2c' });
+              if (vRes.claimable) {
+                const cRes = await claimQuest(token, 'quest-add-network');
+                if (cRes.user) user = cRes.user;
+              }
+            });
+            console.log(`  ${getTimestamp()}       ${colors.green}└─ Quest Add Network BERHASIL (+150 Poin)${colors.reset}`);
+          } catch (qErr) {
+            console.log(`  ${getTimestamp()}       ${colors.yellow}└─ Quest Add Network: ${qErr.message}${colors.reset}`);
+          }
+        }
+      }
+
+      // 4. Daily GM Check-in (quest-daily-gm, +50 Poin)
+      const claimedDaily = new Set(user.claimedDailyQuestIds || []);
+      const todayUTC = new Date().toISOString().split('T')[0];
+      const alreadyClaimedToday =
+        claimedDaily.has('quest-daily-gm') || user.lastDailyClaim === todayUTC;
+
+      if (!alreadyClaimedToday) {
+        try {
+          const gmClaim = await runWithTimer('[4/5] Klaim Daily Check-in (quest-daily-gm)', async () => {
+            return await claimQuest(token, 'quest-daily-gm');
+          });
+
+          if (gmClaim.claimed) {
+            record.status = `${colors.green}[ KLAIM SUKSES ]${colors.reset}`;
+            if (gmClaim.user) user = gmClaim.user;
+            console.log(`  ${getTimestamp()}       ${colors.green}└─ Daily GM BERHASIL (+${gmClaim.pointsAwarded || 50} Poin)! Streak sekarang: ${user.dailyStreak || 1} hari${colors.reset}`);
+          } else {
+            record.status = `${colors.yellow}[ Cek Manual ]${colors.reset}`;
+          }
+        } catch (gmErr) {
+          console.log(`  ${getTimestamp()}       ${colors.red}└─ Daily GM Gagal: ${gmErr.message}${colors.reset}`);
+          record.status = `${colors.red}[ Gagal ]${colors.reset}`;
+        }
+      } else {
+        console.log(`  ${getTimestamp()} ${colors.cyan}[4/5] Daily Check-in : Sudah diklaim hari ini (${user.lastDailyClaim || todayUTC}). Reset pkl 07:00 WIB.${colors.reset}`);
+        record.status = `${colors.cyan}[ SUDAH KLAIM ]${colors.reset}`;
+      }
+
+      // 5. Sweep pending claimable quests
+      if (Array.isArray(user.claimableQuestIds) && user.claimableQuestIds.length > 0) {
+        for (const qId of user.claimableQuestIds) {
+          try {
+            await runWithTimer(`[SWEEP] Klaim Quest Tertunda (${qId})`, async () => {
+              const sClaim = await claimQuest(token, qId);
+              if (sClaim.user) user = sClaim.user;
+            });
+          } catch (_) {}
+        }
+      }
+
+      // 6. Gacha Reveal
+      if (config.AUTO_GACHA_REVEAL) {
+        try {
+          const gacha = await getGachaStatus(token);
+          if (gacha.unrevealedCount > 0 && Array.isArray(gacha.tokens)) {
+            for (const t of gacha.tokens) {
+              if (!t.revealed) {
+                await runWithTimer(`[GACHA] Reveal Node Token #${t.tokenId}`, async () => {
+                  return await revealGacha(token, t.tokenId);
+                });
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 7. Refresh Final Profile
+      try {
+        const refreshed = await getProfile(token);
+        if (refreshed.user) user = refreshed.user;
+      } catch (_) {}
+
+      record.finalPoints = user.points || record.initialPoints;
+      record.streak = user.dailyStreak || record.streak;
+      record.level = user.level || record.level;
+      record.rank = user.rank || record.rank;
+
+      const earned = record.finalPoints - record.initialPoints;
+      const earnedFormatted = earned > 0 ? `+${formatNumber(earned)}` : formatNumber(earned);
+
+      console.log(
+        `  ${getTimestamp()} ${colors.green}[5/5] Selesai Akun #${accountIndex}!${colors.reset} Poin Akhir: ${colors.bold}${colors.green}${formatNumber(record.finalPoints)}${colors.reset} ` +
+        `(${colors.bold}${earnedFormatted} Poin${colors.reset}) | Streak: ${colors.yellow}${record.streak} hari${colors.reset}`
+      );
+    } catch (err) {
+      console.log(`  ${getTimestamp()} ${colors.red}[!] Error Akun #${accountIndex}: ${err.message}${colors.reset}`);
+      record.status = `${colors.red}[ Error ]${colors.reset}`;
+    }
+
+    printAccountFooter();
+    summary.push(record);
+
+    // Sleep between wallets
+    if (i < privateKeys.length - 1 && config.DELAY_BETWEEN_WALLETS_SEC > 0) {
+      console.log(`  ${getTimestamp()} ${colors.dim}Menunggu jeda ${config.DELAY_BETWEEN_WALLETS_SEC} detik sebelum akun berikutnya...${colors.reset}\n`);
+      await sleep(config.DELAY_BETWEEN_WALLETS_SEC * 1000);
+    }
+  }
 
   const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
 
-  // Print Precision Summary Table
+  // Print Summary Table with Precision Box Borders
   printSummaryTable(summary, totalDuration);
 }
 
@@ -462,7 +531,7 @@ function printSummaryTable(summary, totalDuration) {
   let totalFinal = 0;
   let successCount = 0;
 
-  // Table Rows (sorted by index)
+  // Table Rows
   for (const row of summary) {
     totalInitial += row.initialPoints || 0;
     totalFinal += row.finalPoints || 0;
