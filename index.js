@@ -179,7 +179,7 @@ function loadEnv() {
   const envPath = path.join(__dirname, '.env');
   const config = {
     DEFAULT_REFERRAL_CODE: '651A7DCB2E',
-    DELAY_BETWEEN_WALLETS_SEC: 1,
+    DELAY_BETWEEN_WALLETS_SEC: 3,
     AUTO_ONBOARDING: true,
     AUTO_GACHA_REVEAL: true
   };
@@ -193,7 +193,7 @@ function loadEnv() {
       const val = rest.join('=').trim();
       if (key && val) {
         if (key === 'DEFAULT_REFERRAL_CODE') config.DEFAULT_REFERRAL_CODE = val;
-        if (key === 'DELAY_BETWEEN_WALLETS_SEC') config.DELAY_BETWEEN_WALLETS_SEC = parseInt(val, 10) || 1;
+        if (key === 'DELAY_BETWEEN_WALLETS_SEC') config.DELAY_BETWEEN_WALLETS_SEC = parseInt(val, 10) || 3;
         if (key === 'AUTO_ONBOARDING') config.AUTO_ONBOARDING = val.toLowerCase() === 'true';
         if (key === 'AUTO_GACHA_REVEAL') config.AUTO_GACHA_REVEAL = val.toLowerCase() === 'true';
       }

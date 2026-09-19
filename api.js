@@ -1,6 +1,7 @@
 /**
  * Kryvora Daily - API Handler Module
- * Manages HTTP communications with Kryvora Network endpoints.
+ * Manages HTTP communications with Kryvora Network endpoints,
+ * with built-in automatic retry on HTTP 429 (Rate Limit / Too many requests).
  */
 
 const BASE_URL = 'https://tasks.kryvora.network';
@@ -27,6 +28,39 @@ function getHeaders(token = null, customReferer = null) {
 }
 
 /**
+ * Executes a fetch request with automatic exponential backoff retry on HTTP 429 Rate Limit.
+ * @param {string} url - Target URL.
+ * @param {object} options - Fetch options.
+ * @param {number} maxRetries - Maximum retry attempts (default: 3).
+ * @returns {Promise<object>} - Parsed JSON response.
+ */
+async function requestWithRetry(url, options, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({}));
+
+    // Detect Rate Limit (HTTP 429 or "Too many requests" error message)
+    if (response.status === 429 || (data.error && String(data.error).toLowerCase().includes('too many requests'))) {
+      if (attempt < maxRetries) {
+        const retryAfter = response.headers.get('retry-after');
+        const waitSec = retryAfter ? parseInt(retryAfter, 10) : attempt * 6; // 6s, 12s, 18s
+        console.log(
+          `\n    ⚠️  [Rate Limit] Server meminta jeda. Menunggu ${waitSec}s sebelum mencoba ulang (Percobaan ${attempt}/${maxRetries})...`
+        );
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error || `Request failed with status ${response.status}`);
+    }
+
+    return data;
+  }
+}
+
+/**
  * Requests a nonce login message from Kryvora backend.
  * @param {string} address - EVM wallet address.
  * @param {string} referralCode - Referral code (optional).
@@ -38,7 +72,7 @@ async function fetchNonce(address, referralCode = '651A7DCB2E') {
     ? `${BASE_URL}/?ref=${referralCode}`
     : `${BASE_URL}/`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'POST',
     headers: getHeaders(null, referer),
     body: JSON.stringify({
@@ -46,13 +80,6 @@ async function fetchNonce(address, referralCode = '651A7DCB2E') {
       referralCode: referralCode || undefined
     })
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Nonce request failed with status ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -64,7 +91,7 @@ async function fetchNonce(address, referralCode = '651A7DCB2E') {
 async function verifyWallet(address, signature) {
   const url = `${BASE_URL}/api/auth/wallet/verify`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
@@ -72,13 +99,6 @@ async function verifyWallet(address, signature) {
       signature
     })
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Verification failed with status ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -89,17 +109,10 @@ async function verifyWallet(address, signature) {
 async function getProfile(token) {
   const url = `${BASE_URL}/api/portal/me`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'GET',
     headers: getHeaders(token)
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Failed to fetch profile: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -110,17 +123,10 @@ async function getProfile(token) {
 async function getQuests(token = null) {
   const url = `${BASE_URL}/api/portal/quests`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'GET',
     headers: getHeaders(token)
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Failed to fetch quests: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -133,18 +139,11 @@ async function getQuests(token = null) {
 async function verifyQuest(token, questId, payload = {}) {
   const url = `${BASE_URL}/api/portal/quests/${encodeURIComponent(questId)}/verify`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'POST',
     headers: getHeaders(token),
     body: JSON.stringify(payload)
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Quest verify failed: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -156,18 +155,11 @@ async function verifyQuest(token, questId, payload = {}) {
 async function claimQuest(token, questId) {
   const url = `${BASE_URL}/api/portal/quests/${encodeURIComponent(questId)}/claim`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'POST',
     headers: getHeaders(token),
     body: '{}'
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Quest claim failed: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -178,17 +170,10 @@ async function claimQuest(token, questId) {
 async function getGachaStatus(token) {
   const url = `${BASE_URL}/api/portal/gacha/status`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'GET',
     headers: getHeaders(token)
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Failed to fetch gacha status: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 /**
@@ -200,18 +185,11 @@ async function getGachaStatus(token) {
 async function revealGacha(token, tokenId) {
   const url = `${BASE_URL}/api/portal/gacha/reveal`;
 
-  const response = await fetch(url, {
+  return await requestWithRetry(url, {
     method: 'POST',
     headers: getHeaders(token),
     body: JSON.stringify({ tokenId })
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Gacha reveal failed: HTTP ${response.status}`);
-  }
-
-  return data;
 }
 
 module.exports = {
